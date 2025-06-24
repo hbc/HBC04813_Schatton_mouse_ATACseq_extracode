@@ -1,0 +1,442 @@
+---
+title: "Tobias Schatton - Profile Plots - New genes"
+output:
+   html_document:
+      code_folding: hide
+      df_print: paged
+      highlights: pygments
+      number_sections: true
+      self_contained: true
+      theme: default
+      toc: true
+      toc_float:
+         collapsed: true
+         smooth_scroll: true
+date: "2024-08-20"
+---
+
+## Set-up
+
+Here we load packages and the data ahead of our analyses.
+```{r setup, echo = FALSE, cache = FALSE}
+knitr::opts_chunk$set(dev = c('png', 'cairo_pdf'),
+                      fig.align = 'center', 
+                      fig.height = 5, 
+                      fig.width = 7,
+                      pdf.options(encoding = "ISOLatin9.enc"),
+                      fig.path='figures/',
+                      warning=FALSE, 
+                      message=FALSE,
+                      cache = FALSE,
+                      dev = c("png", "pdf"),
+                      error = TRUE,
+                      highlight = TRUE,
+                      prompt = FALSE,
+                      tidy = FALSE, echo=FALSE)
+```
+
+```{r load-libraries}
+# Load libraries
+library(fgsea)
+library(gridExtra)
+library(ggplot2)
+library(tidyverse)
+library(ggrepel)
+library(knitr)
+library(pheatmap)
+library(reshape2)
+library(ChIPpeakAnno)
+
+
+
+# Set ggplot2 default theme
+ggplot2::theme_set(theme_light(base_size = 14))
+
+sanitize_datatable = function(df, ...) {
+ # remove dashes which cause wrapping
+ DT::datatable(df, ..., rownames=gsub("-", "_", rownames(df)),
+                   colnames=gsub("-", "_", colnames(df)))
+}
+
+
+pruned_annotations <- read.csv("/Users/emb016/Documents/HBC04572_Rosen/data/biomart_entrez.csv") %>% .[,-1]
+
+pruned_annotations2 = pruned_annotations %>%
+    arrange(entrezgene_id, ensembl_gene_id) %>%
+    distinct(entrezgene_id, .keep_all = TRUE)
+
+```
+
+## Goals
+
+Here we are trying to look at open chromatin patterns of three candidate genes: PDCD1, CD274, and PDCD1LG2. For each of these we explore different plots to show these patterns. Below we also plot genomic tracks and TF binding sites of interest (IRF1-9 binding, STAT1, and STAT2).
+
+
+
+```{bash, eval=F}
+## make windowed bedfile
+
+bedtools makewindows -b new_genes.bed -w 50 > new_genes_50.bed
+
+
+## deeptools commands
+
+multiBamSummary BED-file --BED new_genes_50.bed --bamfiles alpha_1-ready.bam alpha_2-ready.bam beta_1-ready.bam beta_2-ready.bam untreated12_merged_file1_sorted.bam untreated12_merged_file2_sorted.bam --outRawCounts readCounts_ready_50bp_newgenes.tab
+
+
+ 
+ ## command to generate scaling factors
+ 
+ multiBamSummary bins  --bamfiles alpha_1-NF.bam alpha_2-NF.bam beta_1-NF.bam beta_2-NF.bam untreated12_merged_file1_sorted.bam untreated12_merged_file2_sorted.bam --scalingFactors sf.txt
+
+ 
+```
+
+
+
+## Load count matrices - ready
+```{r}
+
+counts_50 <- read.table("/Users/emb016/Documents/HBC04813_Schatton/figures/new_genes_aug2024/readCounts_ready_50bp_newgenes.tab", header=F)
+
+
+colnames(counts_50) <- c("chr.", "start", "end","IFAlpha_1", "IFAlpha_2", "IFBeta_1","IFBeta_2","Untreated_1","Untreated2")
+
+
+
+
+counts_50$mid <- (counts_50$start + counts_50$end)/2
+
+
+## normalize
+
+## Mapping scaling factors
+#scaling = c(1.5938,1.2124,1.1878,1.3183,0.4789,0.4780)
+
+## Library size factors
+
+#Sample	total reads	size factors
+#alpha_1	83881054	1
+#alpha_2	90167074	1.074939688
+#beta_1	92938466	1.107979235
+#beta_2	87034616	1.037595641
+#untreated_1	85132886	1.014923894
+#untreated_2	85132886	1.014923894
+
+
+scaling = c(1,1.074939688,1.107979235,1.037595641,1.014923894,1.014923894)
+
+counts_50_scaled <- counts_50 
+counts_50_scaled$IFAlpha_1 <- counts_50$IFAlpha_1/scaling[1]
+counts_50_scaled$IFAlpha_2 <- counts_50$IFAlpha_2/scaling[2]
+counts_50_scaled$IFBeta_1 <- counts_50$IFBeta_1/scaling[3]
+counts_50_scaled$IFBeta_2 <- counts_50$IFBeta_2/scaling[4]
+counts_50_scaled$Untreated_1 <- counts_50$Untreated_1/scaling[5]
+counts_50_scaled$Untreated2 <- counts_50$Untreated2/scaling[6]
+
+
+```
+
+# Havcr2 - Ready
+
+Here we have normalized counts for the gene in bins of 50 bp. We plot the smoothed pattern using geom_smooth to look at the overall effect. Green line indicates the TSS and red line indicates the end of the coding region. Any enhancers found in USC genome browser are indicated with black lines
+
+
+
+
+```{r}
+
+counts_50_PDCD1 <- subset(counts_50_scaled, counts_50_scaled$chr.=="chr11" & counts_50_scaled$start > 46447208 & counts_50_scaled$end < 	
+46481755)
+
+
+
+counts_50_PDCD1_melt <- melt(counts_50_PDCD1,id=c("start","end","chr.","mid"))
+
+## Only with averages per group
+
+
+
+counts_50_PDCD1$IFAlpha <- (counts_50_PDCD1$IFAlpha_1 + counts_50_PDCD1$IFAlpha_2)/2
+
+counts_50_PDCD1$IFBeta <- (counts_50_PDCD1$IFBeta_1 + counts_50_PDCD1$IFBeta_2)/2
+
+counts_50_PDCD1$Untreated <- (counts_50_PDCD1$Untreated_1 + counts_50_PDCD1$Untreated2)/2
+
+
+
+counts_50_PDCD1_avg <- counts_50_PDCD1[,c(1,2,3,10,11,12,13)]
+
+
+counts_50_PDCD1_melt_avg <- melt(counts_50_PDCD1_avg,id=c("start","end","chr.","mid"))
+
+```
+
+## Profile Plot
+
+```{r}
+ggplot(counts_50_PDCD1_melt, aes(x=mid,y=value, color=variable))  + geom_smooth(se = FALSE) + geom_vline(xintercept=46454839) + geom_vline(xintercept=46447839) +  geom_vline(xintercept=46448253) + ggtitle("Havcr2 Full 50 bp") + xlab("Position") + ylab("Read Density") + scale_color_manual(values = c("pink","pink1","tomato3","tomato4","grey75","grey85")) + geom_vline(xintercept=46455001, color="darkgreen") + geom_vline(xintercept=46479446, color="red")
+
+
+
+
+```
+
+## Profile Plot averaged replicates
+
+```{r}
+
+ggplot(counts_50_PDCD1_melt_avg, aes(x=mid,y=value, color=variable))  + geom_smooth(se = FALSE) + geom_vline(xintercept=46454839) + geom_vline(xintercept=46447839) +  geom_vline(xintercept=46448253) + ggtitle("Havcr2 Avg 50 bp") + xlab("Position") + ylab("Read Density") + scale_color_manual(values = c("firebrick1","firebrick4","grey58"))  + geom_vline(xintercept=46455001, color="darkgreen") + geom_vline(xintercept=46479446, color="red")
+
+
+
+```
+
+
+
+
+# Lgals9 - Ready
+
+
+Here we have normalized counts for the gene in bins of 50 bp. We plot the smoothed pattern using geom_smooth to look at the overall effect. Green line indicates the TSS and red line indicates the end of the coding region. Any enhancers found in USC genome browser are indicated with black lines.
+
+```{r}
+
+counts_50_CD274 <- subset(counts_50_scaled, counts_50_scaled$chr.=="chr11" & counts_50_scaled$start > 78962474 & counts_50_scaled$end < 78993322) 
+
+
+
+counts_50_CD274_melt <- melt(counts_50_CD274,id=c("start","end","chr.","mid"))
+
+
+## Only with averages per group
+
+
+
+counts_50_CD274$IFAlpha <- (counts_50_CD274$IFAlpha_1 + counts_50_CD274$IFAlpha_2)/2
+
+counts_50_CD274$IFBeta <- (counts_50_CD274$IFBeta_1 + counts_50_CD274$IFBeta_2)/2
+
+counts_50_CD274$Untreated <- (counts_50_CD274$Untreated_1 + counts_50_CD274$Untreated2)/2
+
+
+counts_50_CD274_avg <- counts_50_CD274[,c(1,2,3,10,11,12,13)]
+
+
+counts_50_CD274_melt_avg <- melt(counts_50_CD274_avg,id=c("start","end","chr.","mid"))
+
+
+```
+
+
+```{r}
+
+ggplot(counts_50_CD274_melt, aes(x=mid,y=value, color=variable))  + geom_smooth(se = FALSE) + ggtitle("Lgals9 Full 50 bp") + xlab("Position") + ylab("Read Density") + scale_color_manual(values = c("pink","pink1","tomato3","tomato4","grey75","grey85")) + geom_vline(xintercept=78984816 , color="darkgreen") + geom_vline(xintercept=78963395 , color="red") + geom_vline(xintercept=78985687) + geom_vline(xintercept=78984945)
+
+
+
+```
+
+
+## Profile Plot averaged replicates
+
+```{r}
+ggplot(counts_50_CD274_melt_avg, aes(x=mid,y=value, color=variable))  + geom_smooth(se = FALSE)  + ggtitle("Lgals9 Average 50 bp") + xlab("Position") + ylab("Read Density") + scale_color_manual(values = c("firebrick1","firebrick4","grey58")) + ylim(0,NA) + geom_vline(xintercept=78984816 , color="darkgreen") + geom_vline(xintercept=78963395 , color="red") + geom_vline(xintercept=78985687) + geom_vline(xintercept=78984945)
+
+
+
+
+```
+
+
+
+
+# Hmgb1 - Ready
+
+
+Here we have normalized counts for the gene in bins of 50 bp. We plot the smoothed pattern using geom_smooth to look at the overall effect. Green line indicates the TSS and red line indicates the end of the coding region. Any enhancers found in USC genome browser are indicated with black lines.
+
+**Note that diffbind ID several regions quite far from the gene but annotated them as Hmgb1 (see diffbind excel table). We provide a zoomed out and zoomed in version of the gene to encompass this far away region as well.**
+
+```{r}
+
+counts_50_PDCD1LG2 <- subset(counts_50, counts_50$chr.=="chr5" & counts_50$start > 149043202 & counts_50$end < 149188672)
+
+
+
+counts_50_PDCD1LG2_melt <- melt(counts_50_PDCD1LG2,id=c("start","end","chr.","mid"))
+
+## Only with averages per group
+
+
+counts_50_PDCD1LG2$IFAlpha <- (counts_50_PDCD1LG2$IFAlpha_1 + counts_50_PDCD1LG2$IFAlpha_2)/2
+
+counts_50_PDCD1LG2$IFBeta <- (counts_50_PDCD1LG2$IFBeta_1 + counts_50_PDCD1LG2$IFBeta_2)/2
+
+counts_50_PDCD1LG2$Untreated <- (counts_50_PDCD1LG2$Untreated_1 + counts_50_PDCD1LG2$Untreated2)/2
+
+
+counts_50_PDCD1LG2_avg <- counts_50_PDCD1LG2[,c(1,2,3,10,11,12,13)]
+
+counts_50_PDCD1LG2_melt_avg <- melt(counts_50_PDCD1LG2_avg,id=c("start","end","chr.","mid"))
+
+```
+
+
+```{r}
+
+ggplot(counts_50_PDCD1LG2_melt, aes(x=mid,y=value, color=variable))  + geom_smooth(se = FALSE) + ggtitle("HmgB1 Full 50 bp") + xlab("Position") + ylab("Read Density")+ scale_color_manual(values = c("pink","pink1","tomato3","tomato4","grey75","grey85"))  + geom_vline(xintercept=149050737, color="darkgreen") + geom_vline(xintercept=149048737, color="red") + geom_vline(xintercept=149053122) + geom_vline(xintercept=149053477) + geom_vline(xintercept=149053880) + geom_vline(xintercept=149054109) 
+
+ggplot(counts_50_PDCD1LG2_melt, aes(x=mid,y=value, color=variable))  + geom_smooth(se = FALSE) + ggtitle("HmgB1 Full 50 bp") + xlab("Position") + ylab("Read Density")+ scale_color_manual(values = c("pink","pink1","tomato3","tomato4","grey75","grey85"))  + geom_vline(xintercept=149050737, color="darkgreen") + geom_vline(xintercept=149048737, color="red") + geom_vline(xintercept=149053122) + geom_vline(xintercept=149053477) + geom_vline(xintercept=149053880) + geom_vline(xintercept=149054109) + xlim(149043202,149057217)
+
+```
+
+
+## Profile Plot averaged replicates
+
+```{r}
+
+ggplot(counts_50_PDCD1LG2_melt_avg, aes(x=mid,y=value, color=variable))  + geom_smooth(se = FALSE) + ggtitle("HmgB1 Avg 50 bp") + xlab("Position") + ylab("Read Density")+ scale_color_manual(values = c("firebrick1","firebrick4","grey58")) + geom_vline(xintercept=149050737, color="darkgreen") + geom_vline(xintercept=149048737, color="red") + geom_vline(xintercept=149053122) + geom_vline(xintercept=149053477) + geom_vline(xintercept=149053880) + geom_vline(xintercept=149054109) 
+
+ggplot(counts_50_PDCD1LG2_melt_avg, aes(x=mid,y=value, color=variable))  + geom_smooth(se = FALSE) + ggtitle("HmgB1 Avg 50 bp") + xlab("Position") + ylab("Read Density") + scale_color_manual(values = c("firebrick1","firebrick4","grey58")) + geom_vline(xintercept=149050737, color="darkgreen") + geom_vline(xintercept=149048737, color="red") + geom_vline(xintercept=149053122) + geom_vline(xintercept=149053477) + geom_vline(xintercept=149053880) + geom_vline(xintercept=149054109) + xlim(149043202,149057217)
+
+
+```
+
+
+# Ceacam1 - Ready
+
+
+Here we have normalized counts for the gene in bins of 50 bp. We plot the smoothed pattern using geom_smooth to look at the overall effect. Green line indicates the TSS and red line indicates the end of the coding region. Any enhancers found in USC genome browser are indicated with black lines.
+
+```{r}
+
+counts_50_CECAM1 <- subset(counts_50, counts_50$chr.=="chr7" & counts_50$start > 25461207 & counts_50$end < 25490623)
+
+
+
+counts_50_CECAM1_melt <- melt(counts_50_CECAM1,id=c("start","end","chr.","mid"))
+
+## Only with averages per group
+
+
+counts_50_CECAM1$IFAlpha <- (counts_50_CECAM1$IFAlpha_1 + counts_50_CECAM1$IFAlpha_2)/2
+
+counts_50_CECAM1$IFBeta <- (counts_50_CECAM1$IFBeta_1 + counts_50_CECAM1$IFBeta_2)/2
+
+counts_50_CECAM1$Untreated <- (counts_50_CECAM1$Untreated_1 + counts_50_CECAM1$Untreated2)/2
+
+
+counts_50_CECAM1_avg <- counts_50_CECAM1[,c(1,2,3,10,11,12,13)]
+
+counts_50_CECAM1_melt_avg <- melt(counts_50_CECAM1_avg,id=c("start","end","chr.","mid"))
+
+```
+
+
+```{r}
+ggplot(counts_50_CECAM1_melt, aes(x=mid,y=value, color=variable))  + geom_smooth(se = FALSE) + ggtitle("CEACAM1 Full 50 bp") + xlab("Position") + ylab("Read Density")+ scale_color_manual(values = c("pink","pink1","tomato3","tomato4","grey75","grey85")) + geom_vline(xintercept=25477534, color="darkgreen") + geom_vline(xintercept=25463781, color="red") + geom_vline(xintercept=25477659) + geom_vline(xintercept=25479655) + geom_vline(xintercept=25481036)
+
+
+```
+
+
+## Profile Plot averaged replicates
+
+```{r}
+ggplot(counts_50_CECAM1_melt_avg, aes(x=mid,y=value, color=variable))  + geom_smooth(se = FALSE) + ggtitle("CECAM1 Avg 50 bp") + xlab("Position") + ylab("Read Density") + scale_color_manual(values = c("firebrick1","firebrick4","grey58")) + ylim(0,NA) + geom_vline(xintercept=25477534, color="darkgreen") + geom_vline(xintercept=25463781, color="red") + geom_vline(xintercept=25477659) + geom_vline(xintercept=25479655) + geom_vline(xintercept=25481036)
+
+
+
+```
+
+
+
+## Prepare combined list of motifs and seq from UCSC
+```{r}
+
+
+library(tidyverse)
+
+# Function to parse FASTA to table
+fasta_to_table <- function(filepath) {
+  # Read all lines
+  lines <- readLines(filepath)
+  
+  # Find header lines
+  headers <- grep("^>", lines)
+  sequences <- list()
+  
+  for (i in seq_along(headers)) {
+    start <- headers[i]
+    end <- if (i < length(headers)) headers[i+1] - 1 else length(lines)
+    
+    header <- sub("^>", "", lines[start])
+    sequence <- paste(lines[(start + 1):end], collapse = "")
+    
+    sequences[[i]] <- tibble(
+      id = strsplit(header, " ")[[1]][1],
+      description = paste(strsplit(header, " ")[[1]][-1], collapse = " "),
+      sequence = sequence
+    )
+  }
+  
+  bind_rows(sequences)
+}
+
+# LGALS9
+fasta_path <- "/Users/emb016/Documents/HBC04813_Schatton/LGALs9_motif_sequence.csv"
+lgal_fasta_df <- data.frame(fasta_to_table(fasta_path))
+
+lgal_fasta_df$name <- sapply(strsplit(lgal_fasta_df$id,"_"), `[`, 3)
+lgal_fasta_df$start <- sapply(strsplit(lgal_fasta_df$description,"[-=:\\s]+"), `[`, 3)
+lgal_fasta_df$end <- sapply(strsplit(lgal_fasta_df$description,"[-=:\\s]+"), `[`, 4)
+lgal_fasta_df$end <- sapply(strsplit(lgal_fasta_df$end,"\\s+"), `[`, 1)
+lgal_fasta_df$strand <- sapply(strsplit(lgal_fasta_df$description,"[=:]+"), `[`, 6)
+lgal_fasta_df$strand <- sapply(strsplit(lgal_fasta_df$strand,"\\s+"), `[`, 1)
+
+lgal_fasta_df$start <- as.integer(lgal_fasta_df$start)
+lgal_fasta_df$end <- as.integer(lgal_fasta_df$end)
+
+lgal_info <- read.delim("/Users/emb016/Documents/HBC04813_Schatton/lgals9_motif_list.csv", sep=",")
+colnames(lgal_info)[2:3] <- c("start","end")
+lgal_full <- lgal_info %>% left_join(lgal_fasta_df[,c(3:7)], by=c("end","name","strand"))
+write.table(lgal_full, file="/Users/emb016/Documents/HBC04813_Schatton/Lgals9_motifs.csv", sep=",", quote=F, row.names = F)
+
+#CEACAM1
+
+fasta_path <- "/Users/emb016/Documents/HBC04813_Schatton/ceacam_motif_sequence.csv"
+ceacam_fasta_df <- data.frame(fasta_to_table(fasta_path))
+
+ceacam_fasta_df$name <- sapply(strsplit(ceacam_fasta_df$id,"_"), `[`, 3)
+ceacam_fasta_df$start <- sapply(strsplit(ceacam_fasta_df$description,"[-=:\\s]+"), `[`, 3)
+ceacam_fasta_df$end <- sapply(strsplit(ceacam_fasta_df$description,"[-=:\\s]+"), `[`, 4)
+ceacam_fasta_df$end <- sapply(strsplit(ceacam_fasta_df$end,"\\s+"), `[`, 1)
+ceacam_fasta_df$strand <- sapply(strsplit(ceacam_fasta_df$description,"[=:]+"), `[`, 6)
+ceacam_fasta_df$strand <- sapply(strsplit(ceacam_fasta_df$strand,"\\s+"), `[`, 1)
+
+ceacam_fasta_df$start <- as.integer(ceacam_fasta_df$start)
+ceacam_fasta_df$end <- as.integer(ceacam_fasta_df$end)
+
+ceacam_info <- read.delim("/Users/emb016/Documents/HBC04813_Schatton/ceacam_motif_list.csv", sep=",")
+colnames(ceacam_info)[2:3] <- c("start","end")
+
+ceacam_full <- ceacam_info %>% left_join(ceacam_fasta_df[,c(3:7)], by=c("end","name","strand"))
+
+write.table(ceacam_full, file="/Users/emb016/Documents/HBC04813_Schatton/ceacam_motifs.csv", sep=",", quote=F, row.names = F)
+
+
+
+
+```
+
+
+
+
+# R session
+
+List and version of tools used for the report.
+
+```{r}
+sessionInfo()
+```
